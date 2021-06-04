@@ -1,8 +1,17 @@
 # ext/pci_core/extconf.rb
 require 'mkmf'
 
+# Kernel headers
+#LKERN = "/usr/src/linux-headers-#{`uname -r`.strip}-common/include"
+
 # Build PCI
-$LFLAGS = ['-lpci', '-lpciaccess', '-lkmod']
+$LFLAGS = [
+  '-lpci',
+  '-lpciaccess',
+  '-lkmod',
+  #"-L#{LKERN}"
+]
+$FLAGS = ['clean']
 
 # Dependency checker
 lchecks = []
@@ -13,6 +22,7 @@ headers = [
   'pciaccess.h',
   'libkmod.h',
   'sys/utsname.h',
+  #"#{LKERN}/linux/device.h",
   #'proc_fs.h',
 ]
 

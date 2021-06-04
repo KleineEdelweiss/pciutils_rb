@@ -86,6 +86,7 @@ VALUE method_pci_list(VALUE self) {
     // Additional information struct
     struct pci_dev *dev_info = pci_get_dev(list,
       dev->domain_16, dev->bus, dev->dev, dev->func);
+    
     // Use all flags possible
     int flags = INT_MAX;
     
@@ -145,9 +146,9 @@ VALUE method_pci_list(VALUE self) {
         
     // Attach IDs
     rb_hash_aset(new_dev, rb_id2sym(rb_intern("vendor_id")),
-        INT2NUM(dev_info->vendor_id));
+      INT2NUM(dev_info->vendor_id));
     rb_hash_aset(new_dev, rb_id2sym(rb_intern("device_id")),
-        INT2NUM(dev_info->device_id));
+      INT2NUM(dev_info->device_id));
     
     // Driver information
     const char *phy_ptr = pci_get_string_property(dev_info, PCI_FILL_PHYS_SLOT);
@@ -155,8 +156,17 @@ VALUE method_pci_list(VALUE self) {
     if (phy_ptr) { phys = rb_str_new2(phy_ptr); } // End physical slot reader
     rb_hash_aset(new_dev, rb_id2sym(rb_intern("phys")), phys);
     
-    // Driver information
-    // /lib/modules/`uname -r`/modules.alias
+    // Driver information link
+    // /proc/bus/pci/devices
+    VALUE matches = rb_hash_new();
+    rb_hash_aset(matches, rb_id2sym(rb_intern("bus")),
+      rb_sprintf("%02x%02x", dev->bus, dev->func));
+    rb_hash_aset(matches, rb_id2sym(rb_intern("idents")),
+      rb_sprintf("%04x%04x", dev_info->vendor_id, dev_info->device_id));
+    // Attach the matcher for /proc to the main device hash
+    rb_hash_aset(new_dev, rb_id2sym(rb_intern("matcher")), matches);
+    
+    // Modalias
     const char *mod_ptr = pci_get_string_property(dev_info, PCI_FILL_MODULE_ALIAS);
     VALUE module = Qnil;
     if (mod_ptr) {
