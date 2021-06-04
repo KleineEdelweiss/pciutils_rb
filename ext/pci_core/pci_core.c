@@ -1,9 +1,18 @@
 // ext/pci_core/pci_core.c
+// Ruby module
 #include <ruby.h>
+
+// System modules
 #include <stdio.h>
 #include <stdlib.h>
+#include <sys/utsname.h>
+
+// Device modules
 #include <pci/pci.h>
 #include <pciaccess.h>
+#include <libkmod.h>
+
+// Other modules
 #include <string.h>
 
 // Initializers
@@ -23,6 +32,13 @@ VALUE method_pci_types(VALUE self) {
 
 // List all of the PCI devices
 VALUE method_pci_list(VALUE self) {
+  // Get the machine architecture, for 
+  struct utsname sysinfo;
+  uname(&sysinfo);
+  
+  // Generate the modalias path
+  VALUE path = rb_sprintf("/lib/modules/%s/modules.alias", sysinfo.release);
+  
   // Init main PCI system
   pci_system_init();
   // Allocate PCI device access list
@@ -32,6 +48,10 @@ VALUE method_pci_list(VALUE self) {
   
   // Create the new mapping hash
   VALUE map = rb_hash_new();
+  rb_hash_aset(map, rb_id2sym(rb_intern("modalias")), path);
+  
+  VALUE devices = rb_ary_new(); // Array of devices
+  int count = 0; // Device counter
   
   // Matcher used to simply say to get all the devices
   // (for now...)
@@ -59,26 +79,11 @@ VALUE method_pci_list(VALUE self) {
     // Additional information struct
     struct pci_dev *dev_info = pci_get_dev(list,
       dev->domain_16, dev->bus, dev->dev, dev->func);
-    /*int flags = PCI_FILL_IDENT
-      || PCI_FILL_PHYS_SLOT
-      || PCI_FILL_IRQ
-      || PCI_FILL_BASES
-      || PCI_FILL_ROM_BASE
-      || PCI_FILL_SIZES
-      || PCI_FILL_CLASS
-      || PCI_FILL_PHYS_SLOT
-      || PCI_FILL_MODULE_ALIAS
-      || PCI_FILL_LABEL
-      || PCI_FILL_NUMA_NODE
-      || PCI_FILL_IOMMU_GROUP;*/
+    // Use all flags possible
     int flags = INT_MAX;
-    //int flags = -1;
     
     // Fill in the card information, as flagged above
     int e = pci_fill_info(dev_info, flags);
-    
-    // Flag fill return
-    //rb_hash_aset(new_dev, rb_id2sym(rb_intern("fill_info")), INT2NUM(e));
     
     // Core character data
     const char *device = pci_device_get_device_name(dev);
@@ -100,15 +105,12 @@ VALUE method_pci_list(VALUE self) {
     rb_hash_aset(new_dev, rb_id2sym(rb_intern("prog_interface")),
       INT2NUM(prog_interface));
     
-    // Create slot index
-    VALUE slot = rb_hash_new();
-    
-    // Slot is string index
-    VALUE slot_str = rb_sprintf("%04x:%02x:%02x.%x",
+    // Slot string
+    VALUE slot = rb_sprintf("%04x:%02x:%02x.%x",
       dev->domain_16, dev->bus, dev->dev, dev->func);
     
-    // Add the string index
-    rb_hash_aset(slot, rb_id2sym(rb_intern("name")), slot_str);
+    // Add the slot name
+    rb_hash_aset(new_dev, rb_id2sym(rb_intern("dev_name")), slot);
     
     // Slot parts are the raw slot data
     VALUE slot_ary = rb_ary_new();
@@ -118,7 +120,7 @@ VALUE method_pci_list(VALUE self) {
     rb_ary_store(slot_ary, 3, INT2NUM(dev->func));
     
     // Add the raw index portion
-    rb_hash_aset(slot, rb_id2sym(rb_intern("raw")), slot_ary);
+    rb_hash_aset(new_dev, rb_id2sym(rb_intern("dev_raw")), slot_ary);
     
     // Attach core device info
     if (device) {
@@ -147,9 +149,15 @@ VALUE method_pci_list(VALUE self) {
     rb_hash_aset(new_dev, rb_id2sym(rb_intern("phys")), phys);
     
     // Driver information
+    // /lib/modules/`uname -r`/modules.alias
     const char *mod_ptr = pci_get_string_property(dev_info, PCI_FILL_MODULE_ALIAS);
     VALUE module = Qnil;
-    if (mod_ptr) { module = rb_str_new2(mod_ptr); } // End module reader
+    if (mod_ptr) {
+      int len = strlen(mod_ptr);
+      char mfix[len];
+      memcpy(mfix, mod_ptr, len - 1);
+      module = rb_str_new2(mfix);
+    } // End module reader
     rb_hash_aset(new_dev, rb_id2sym(rb_intern("modalias")), module);
     
     // BIOS Label
@@ -174,11 +182,14 @@ VALUE method_pci_list(VALUE self) {
     if (iommu_ptr) { iommu = rb_str_new2(iommu_ptr); } // End IOMMU group access
     rb_hash_aset(new_dev, rb_id2sym(rb_intern("iommu")), iommu);
     
-    // Attach the slot to the device map
-    rb_hash_aset(map, slot, new_dev);
+    // Attach the device to the devices list
+    rb_ary_store(devices, count, new_dev);
     pci_free_dev(dev_info); // Clear the information pointer
+    count++; // Increment the device counter
   } // End creation of new PCI device
   
+  // Attach all the devices
+  rb_hash_aset(map, rb_id2sym(rb_intern("devices")), devices);
   // Clean up the resources
   pci_iterator_destroy(itr); // Delete iterator
   pci_cleanup(list); // Clean up PCI core system
