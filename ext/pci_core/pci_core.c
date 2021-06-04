@@ -18,6 +18,19 @@
 // Initializers
 VALUE PciCore = Qnil;
 
+// Get the driver configuration
+VALUE method_pci_get_config(VALUE self) {
+  // Get the machine architecture, for 
+  struct utsname sysinfo;
+  uname(&sysinfo);
+  
+  // Generate the modalias path
+  VALUE path = rb_sprintf("/lib/modules/%s/modules.alias", sysinfo.release);
+  
+  // Return the path for the modalias file
+  return path;
+} // End get driver config
+
 /*// Test the device class
 VALUE method_pci_types(VALUE self) {
   VALUE map = rb_hash_new();
@@ -32,13 +45,6 @@ VALUE method_pci_types(VALUE self) {
 
 // List all of the PCI devices
 VALUE method_pci_list(VALUE self) {
-  // Get the machine architecture, for 
-  struct utsname sysinfo;
-  uname(&sysinfo);
-  
-  // Generate the modalias path
-  VALUE path = rb_sprintf("/lib/modules/%s/modules.alias", sysinfo.release);
-  
   // Init main PCI system
   pci_system_init();
   // Allocate PCI device access list
@@ -47,8 +53,9 @@ VALUE method_pci_list(VALUE self) {
   pci_scan_bus(list); // Scan all devices
   
   // Create the new mapping hash
-  VALUE map = rb_hash_new();
-  rb_hash_aset(map, rb_id2sym(rb_intern("modalias")), path);
+  //VALUE map = rb_hash_new();
+  //rb_hash_aset(map, rb_id2sym(rb_intern("modalias")),
+  //  method_pci_get_config(self));
   
   VALUE devices = rb_ary_new(); // Array of devices
   int count = 0; // Device counter
@@ -189,12 +196,12 @@ VALUE method_pci_list(VALUE self) {
   } // End creation of new PCI device
   
   // Attach all the devices
-  rb_hash_aset(map, rb_id2sym(rb_intern("devices")), devices);
+  //rb_hash_aset(map, rb_id2sym(rb_intern("devices")), devices);
   // Clean up the resources
   pci_iterator_destroy(itr); // Delete iterator
   pci_cleanup(list); // Clean up PCI core system
   pci_system_cleanup(); // Clean up the access system
-  return map;
+  return devices;
 } // end test method
 
 // Init the PCI Core extension
@@ -204,5 +211,6 @@ void Init_pci_core() {
   
   // Functions
   rb_define_module_function(PciCore, "list", method_pci_list, 0);
+  rb_define_module_function(PciCore, "get_config", method_pci_get_config, 0);
   //rb_define_module_function(PciCore, "types", method_pci_types, 0);
 } // End init
