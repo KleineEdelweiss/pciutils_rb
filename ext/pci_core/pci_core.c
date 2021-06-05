@@ -5,43 +5,33 @@
 // System modules
 #include <stdio.h>
 #include <stdlib.h>
-#include <sys/utsname.h>
 
 // Device modules
 #include <pci/pci.h>
 #include <pciaccess.h>
-#include <libkmod.h>
 
 // Other modules
 #include <string.h>
 
 // Initializers
 VALUE PciCore = Qnil;
+VALUE PClassFilters = Qnil;
 
-// Get the driver configuration
-VALUE method_pci_get_config(VALUE self) {
-  // Get the machine architecture, for 
-  struct utsname sysinfo;
-  uname(&sysinfo);
-  
-  // Generate the modalias path
-  VALUE path = rb_sprintf("/lib/modules/%s/modules.alias", sysinfo.release);
-  
-  // Return the path for the modalias file
-  return path;
-} // End get driver config
-
-/*// Test the device class
-VALUE method_pci_types(VALUE self) {
-  VALUE map = rb_hash_new();
-  rb_hash_aset(map, rb_id2sym(rb_intern("processor")),
-    INT2NUM(PCI_BASE_CLASS_PROCESSOR));
-  rb_hash_aset(map, rb_id2sym(rb_intern("memory")),
-    INT2NUM(PCI_BASE_CLASS_MEMORY));
-  
-  return map;
-} // End device class test
-*/
+/*
+ * PCI devices classes are stored under #{architecture}/pci/header.h.
+ *   Example: /usr/include/x86_64-linux-gnu/pci/header.h
+ * 
+ * The #defines include things like (int and hex values listed as of
+ *    the time of writing. Doubt they'll change, but don't hard code
+ *    against them, in case they do -- use the #define'd versions
+ *    I will export these in the header file):
+ * -PCI_BASE_CLASS_PROCESSOR (11 / 0x0b)
+ * -PCI_BASE_CLASS_MEMORY (5, 0x05)
+ * -PCI_BASE_CLASS_MULTIMEDIA (4, 0x04)
+ * 
+ * header.h is also automatically included by <pci/pci.h>, so it's
+ * not explicitly listed above.
+ */
 
 // List all of the PCI devices
 VALUE method_pci_list(VALUE self) {
@@ -212,15 +202,51 @@ VALUE method_pci_list(VALUE self) {
   pci_cleanup(list); // Clean up PCI core system
   pci_system_cleanup(); // Clean up the access system
   return devices;
-} // end test method
+} // End test method
+
+// Return the filters
+VALUE method_pci_filters_get(VALUE self) {
+  return PClassFilters;
+} // End PCI filter return
+
+// Set the filters
+VALUE method_pci_filters_set(VALUE self, VALUE arg_arr) {
+  // If it's an array, set the values
+  if (RB_TYPE_P(arg_arr, T_ARRAY)) {
+    int len = RARRAY_LEN(arg_arr);
+    PClassFilters = arg_arr; // Apply the values
+    return method_pci_filters_get(self); // Return the filter array
+  } else { // Print an error, if it is not an array
+    return rb_str_new2("::PciCore ERROR:: Args must be in the form of an array.");
+  }
+} // End PCI filter setter
+
+// Clear the filters
+VALUE method_pci_filters_clear(VALUE self) {
+  VALUE empty = rb_ary_new(); // Array has no args
+  /* 
+   * Set with empty array.
+   * 
+   * Will automatically return the array, as it is
+   * returned from the setter.
+   * 
+   * Cannot fail, as it is an empty array.
+  */
+  return method_pci_filters_set(self, empty);
+} // End PCI filter clear
 
 // Init the PCI Core extension
 void Init_pci_core() {
   // Init the module
   PciCore = rb_define_module("PciCore");
+  PClassFilters = rb_ary_new();
+  
+  // Module filter variables
+  rb_define_readonly_variable("$pci_class_filters", &PClassFilters);
   
   // Functions
   rb_define_module_function(PciCore, "list", method_pci_list, 0);
-  rb_define_module_function(PciCore, "get_config", method_pci_get_config, 0);
-  //rb_define_module_function(PciCore, "types", method_pci_types, 0);
+  rb_define_module_function(PciCore, "get_filters", method_pci_filters_get, 0);
+  rb_define_module_function(PciCore, "set_filters", method_pci_filters_set, 1);
+  rb_define_module_function(PciCore, "clear_filters", method_pci_filters_clear, 0);
 } // End init

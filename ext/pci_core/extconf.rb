@@ -1,30 +1,15 @@
 # ext/pci_core/extconf.rb
 require 'mkmf'
 
-# Kernel headers
-#LKERN = "/usr/src/linux-headers-#{`uname -r`.strip}-common/include"
-
 # Build PCI
-$LFLAGS = [
-  '-lpci',
-  '-lpciaccess',
-  '-lkmod',
-  #"-L#{LKERN}"
-]
+$LFLAGS = ['-lpci', '-lpciaccess',]
 $FLAGS = ['clean']
 
 # Dependency checker
 lchecks = []
 hchecks = []
-libs = ['pci', 'pciaccess', 'kmod']
-headers = [
-  'pci/pci.h',
-  'pciaccess.h',
-  'libkmod.h',
-  'sys/utsname.h',
-  #"#{LKERN}/linux/device.h",
-  #'proc_fs.h',
-]
+libs = ['pci', 'pciaccess',]
+headers = ['pci/pci.h', 'pciaccess.h',]
 
 # Loop through the libraries and headers
 libs.each { |l| lchecks << have_library(l) }
