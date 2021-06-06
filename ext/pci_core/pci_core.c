@@ -1,6 +1,8 @@
 // ext/pci_core/pci_core.c
+
 // Ruby module
 #include <ruby.h>
+#include <ruby/re.h>
 
 // System modules
 #include <stdio.h>
@@ -12,6 +14,12 @@
 
 // Other modules
 #include <string.h>
+
+// Buffer size
+#define BUFSIZE 4096
+
+// Local modules
+#include "./pci_core.h"
 
 // Initializers
 VALUE PciCore = Qnil;
@@ -32,6 +40,35 @@ VALUE PClassFilters = Qnil;
  * header.h is also automatically included by <pci/pci.h>, so it's
  * not explicitly listed above.
  */
+
+// Mimic 'strip' in the background,
+// but do not expose the method
+VALUE method_hidden_strip(VALUE self, VALUE string) {
+  // Check string
+  if (!RB_TYPE_P(string, T_STRING)) { return Qnil; }
+  VALUE str = rb_str_to_str(string);
+  
+  // Initialize the regex strippers
+  VALUE lstrip = rb_reg_regcomp(rb_str_new2("\\w"));
+  VALUE rstrip = rb_reg_regcomp(rb_str_new2("\\s+$"));
+  
+  // Get the length
+  long len = NUM2LONG(rb_str_length(str));
+  
+  // Return early, if no length
+  if (len < 1) { return str; }
+  
+  // Find the indices
+  VALUE start = rb_reg_match(lstrip, str);
+  VALUE end = rb_reg_match(rstrip, str);
+  
+  // Fix the values
+  long st = (NIL_P(start) ? 0 : NUM2LONG(start));
+  long en = (NIL_P(end) ? len : NUM2LONG(end));
+  
+  // Return the new string
+  return rb_str_substr(str, st, (en - st));
+} // End strip
 
 // List all of the PCI devices
 VALUE method_pci_list(VALUE self) {
@@ -68,8 +105,25 @@ VALUE method_pci_list(VALUE self) {
   struct pci_device_iterator *itr = pci_id_match_iterator_create(&matcher);
   struct pci_device *dev = NULL;
   
+  // Get the filter length here to avoid extra check overhead
+  int f_len = RARRAY_LEN(PClassFilters);
+  
   // Loop until no more devices can be enumerated (.next => NULL)
   while (dev = pci_device_next(itr)) {
+    // Class structure
+    // This was moved to the top, because it will
+    // be used to determine filters
+    int class = (dev->device_class & 0x7F8000) >> 16;
+    int subclass = (dev->device_class & 0x7F80) >> 8;
+    int prog_interface = dev->device_class & 0x7F;
+    
+    // Iterate over the filters to see if the
+    // device matches. If filters length is 0,
+    // then skip.
+    if (f_len > 0) {
+      if (!rb_ary_includes(PClassFilters, INT2NUM(class))) { continue; }
+    } // End filter checker
+    
     // Allocate device object to store keys in
     VALUE new_dev = rb_hash_new();
     
@@ -88,11 +142,6 @@ VALUE method_pci_list(VALUE self) {
     const char *vendor = pci_device_get_vendor_name(dev);
     const char *subdevice = pci_device_get_subdevice_name(dev);
     const char *subvendor = pci_device_get_subvendor_name(dev);
-    
-    // Class structure
-    int prog_interface = dev->device_class & 0x7F;
-    int subclass = (dev->device_class & 0x7F80) >> 8;
-    int class = (dev->device_class & 0x7F8000) >> 16;
     
     // Domain for the card
     rb_hash_aset(new_dev, rb_id2sym(rb_intern("domain")), INT2NUM(dev->domain));
@@ -160,17 +209,20 @@ VALUE method_pci_list(VALUE self) {
     const char *mod_ptr = pci_get_string_property(dev_info, PCI_FILL_MODULE_ALIAS);
     VALUE module = Qnil;
     if (mod_ptr) {
-      int len = strlen(mod_ptr);
-      char mfix[len];
-      memcpy(mfix, mod_ptr, len - 1);
-      module = rb_str_new2(mfix);
+      module = method_hidden_strip(self, rb_str_new2(mod_ptr));
+    } else {
+      module = rb_str_new2("");
     } // End module reader
     rb_hash_aset(new_dev, rb_id2sym(rb_intern("modalias")), module);
     
     // BIOS Label
     const char *bios_ptr = pci_get_string_property(dev_info, PCI_FILL_LABEL);
     VALUE label = Qnil;
-    if (bios_ptr) { label = rb_str_new2(bios_ptr); } // End label reader
+    if (bios_ptr) {
+      label = method_hidden_strip(self, rb_str_new2(bios_ptr));
+    } else {
+      label = rb_str_new2("");
+    } // End label reader
     rb_hash_aset(new_dev, rb_id2sym(rb_intern("label")), label);
     
     // Format these as "0x02"
@@ -186,7 +238,11 @@ VALUE method_pci_list(VALUE self) {
     // IOMMU Group
     const char *iommu_ptr = pci_get_string_property(dev_info, PCI_FILL_IOMMU_GROUP);
     VALUE iommu = Qnil;
-    if (iommu_ptr) { iommu = rb_str_new2(iommu_ptr); } // End IOMMU group access
+    if (iommu_ptr) {
+      iommu = method_hidden_strip(self, rb_str_new2(iommu_ptr));
+    } else {
+      iommu = rb_str_new2("");
+    } // End IOMMU group access
     rb_hash_aset(new_dev, rb_id2sym(rb_intern("iommu")), iommu);
     
     // Attach the device to the devices list
@@ -241,6 +297,9 @@ void Init_pci_core() {
   PciCore = rb_define_module("PciCore");
   PClassFilters = rb_ary_new();
   
+  // Attach constants for filtering
+  method_attach_constants(PciCore);
+  
   // Module filter variables
   rb_define_readonly_variable("$pci_class_filters", &PClassFilters);
   
@@ -249,4 +308,6 @@ void Init_pci_core() {
   rb_define_module_function(PciCore, "get_filters", method_pci_filters_get, 0);
   rb_define_module_function(PciCore, "set_filters", method_pci_filters_set, 1);
   rb_define_module_function(PciCore, "clear_filters", method_pci_filters_clear, 0);
+  
+  //rb_define_module_function(PciCore, "strip", method_hidden_strip, 1);
 } // End init

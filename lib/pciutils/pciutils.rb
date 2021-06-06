@@ -12,7 +12,15 @@ require_relative "../pci_core/pci_core"
 module PciUtils
   ##
   # Stat the cache
-  def self.stat() PciUtils::Cache.instance.stat end
+  def self.stat
+    out = PciUtils::Cache.instance.stat
+    if out then # Make sure the cache is loaded
+      return out
+    else # Otherwise, load it and return that
+      self.update
+      return PciUtils::Cache.instance.stat
+    end
+  end # End stat method
   
   ##
   # Update the cache
