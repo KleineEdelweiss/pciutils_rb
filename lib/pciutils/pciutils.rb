@@ -29,11 +29,18 @@ module PciUtils
   end # End update method
   
   ##
-  # Load in the procfs data
-  def self.procload
-    File.read("/proc/bus/pci/devices").split(/\n/).collect { |row| row.split(/\s+/) }
-      .select { |row| row.last.match?(/\D/) }
-  end # End procfs loader
+  # Get the filters currently set for the PciCore
+  def self.get_filters() PciUtils::Cache.instance.get_filters end
+  
+  ##
+  # Clear the PciCore filters through the Cache
+  def self.clear_filters() PciUtils::Cache.instance.clear_filters end
+  
+  ##
+  # Set the filters (wrapped through the Cache)
+  def self.set_filters(filters)
+    PciUtils::Cache.instance.set_filters filters
+  end # End filter setter
   
   ##
   # Cache is the current PCI device store and
@@ -83,17 +90,25 @@ module PciUtils
     end # End cache stat method
     
     ##
+    # Load the extra data from procfs, so that the drivers
+    # can be attached, as most users will not be able to
+    # directly compile this from kernel headers.
+    def procload
+      @pcache = File.read("/proc/bus/pci/devices").split(/\n/)
+        .collect { |row| row.split(/\s+/) }
+        .select { |row| row.last.match?(/\D/) }
+    end # End the procfs data loader
+    
+    ##
     # Update the cache
     def update(count_only = nil)
       # Load in the PCI devices from C
       if count_only then return pro_list true
       else
         @ccache = pro_list nil
-        @mcache = @ccache
-        # Load the procfs data
-        @pcache = PciUtils.procload
-        
-        # Merge the data
+        # Load the procfs data,
+        # and then merge the caches.
+        procload
         merge_caches
       end
     end # End the update method
@@ -125,8 +140,18 @@ module PciUtils
     end # End the device merge method
     
     ##
-    # Set the filters for the underlying abstract class
-    def set_filters(filters) pro_set_filters(filters) end # End filter setter
+    # Set the filters for the underlying abstract class.
+    # Although the C-side performs type-checking, it is
+    # performed here, as well, to emit an error message.
+    # 
+    # The filters passed in should be an array of integers,
+    # as defined by the PciCore module constants. The reason
+    # for the double-wrapping is in case the AbsPci class is
+    # wrapped by something else.
+    def set_filters(filters)
+      #pro_set_filters(filters.collect { |x| Fixnum === x })
+      pro_set_filters(filters)
+    end # End filter setter
     
     ##
     # Clear the filters for the underlying abstract class

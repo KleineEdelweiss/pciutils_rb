@@ -293,8 +293,20 @@ VALUE method_pro_pci_filters_get(VALUE self) {
 VALUE method_pro_pci_filters_set(VALUE self, VALUE arg_arr) {
   // If it's an array, set the values
   if (RB_TYPE_P(arg_arr, T_ARRAY)) {
+    // Get the length
     int len = RARRAY_LEN(arg_arr);
-    PClassFilters = arg_arr; // Apply the values
+    // Allocate the new array and loop through
+    // the arguments.
+    VALUE new_filters = rb_ary_new();
+    for (int i = 0; i < len; i++) {
+      // Pop from the argument array
+      // but only add it, if it's numeric.
+      VALUE item = rb_ary_pop(arg_arr);
+      if (FIXNUM_P(item)) { rb_ary_push(new_filters, item); }
+    } // End parameter loop
+    
+    // Sort the new array, and apply it to the filter list
+    PClassFilters = rb_ary_sort(new_filters);
     return method_pro_pci_filters_get(self); // Return the filter array
   } else { // Print an error, if it is not an array
     return rb_str_new2("::PciCore ERROR:: Args must be in the form of an array.");
