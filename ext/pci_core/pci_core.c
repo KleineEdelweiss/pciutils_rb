@@ -23,6 +23,7 @@
 
 // Initializers
 VALUE PciCore = Qnil;
+VALUE PciCoreAbs = Qnil;
 VALUE PClassFilters = Qnil;
 
 /*
@@ -70,8 +71,147 @@ VALUE method_hidden_strip(VALUE self, VALUE string) {
   return rb_str_substr(str, st, (en - st));
 } // End strip
 
+// Separate method to attach individual devices to the
+// device list map.
+VALUE method_hidden_attach_dev(
+  VALUE self,
+  struct pci_access *list,
+  struct pci_device *dev,
+  int class
+) {
+  // Class structure
+  // This was moved to the top, because it will
+  // be used to determine filters
+  int subclass = (dev->device_class & 0x7F80) >> 8;
+  int prog_interface = dev->device_class & 0x7F;
+    
+  // Allocate device object to store keys in
+  VALUE new_dev = rb_hash_new();
+  
+  // Additional information struct
+  struct pci_dev *dev_info = pci_get_dev(list,
+    dev->domain_16, dev->bus, dev->dev, dev->func);
+  
+  // Use all flags possible
+  int flags = INT_MAX;
+  
+  // Fill in the card information, as flagged above
+  int e = pci_fill_info(dev_info, flags);
+  
+  // Core character data
+  const char *device = pci_device_get_device_name(dev);
+  const char *vendor = pci_device_get_vendor_name(dev);
+  const char *subdevice = pci_device_get_subdevice_name(dev);
+  const char *subvendor = pci_device_get_subvendor_name(dev);
+  
+  // Domain for the card
+  rb_hash_aset(new_dev, rb_id2sym(rb_intern("domain")), INT2NUM(dev->domain));
+  
+  // These should usually be formatted as "%02x" for display
+  rb_hash_aset(new_dev, rb_id2sym(rb_intern("class")), INT2NUM(class));
+  rb_hash_aset(new_dev, rb_id2sym(rb_intern("subclass")), INT2NUM(subclass));
+  rb_hash_aset(new_dev, rb_id2sym(rb_intern("prog_interface")),
+    INT2NUM(prog_interface));
+  
+  // Slot string
+  VALUE slot = rb_sprintf("%04x:%02x:%02x.%x",
+    dev->domain_16, dev->bus, dev->dev, dev->func);
+  
+  // Add the slot name
+  rb_hash_aset(new_dev, rb_id2sym(rb_intern("dev_name")), slot);
+  
+  // Slot parts are the raw slot data
+  VALUE slot_ary = rb_ary_new();
+  rb_ary_store(slot_ary, 0, INT2NUM(dev->domain_16));
+  rb_ary_store(slot_ary, 1, INT2NUM(dev->bus));
+  rb_ary_store(slot_ary, 2, INT2NUM(dev->dev));
+  rb_ary_store(slot_ary, 3, INT2NUM(dev->func));
+  
+  // Add the raw index portion
+  rb_hash_aset(new_dev, rb_id2sym(rb_intern("dev_raw")), slot_ary);
+  
+  // Attach core device info
+  if (device) {
+    rb_hash_aset(new_dev, rb_id2sym(rb_intern("device")),
+      rb_str_new2(device)); }
+  if (vendor) {
+    rb_hash_aset(new_dev, rb_id2sym(rb_intern("vendor")),
+      rb_str_new2(vendor)); }
+  if (subdevice) {
+    rb_hash_aset(new_dev, rb_id2sym(rb_intern("subdevice")),
+      rb_str_new2(subdevice)); }
+  if (subvendor) {
+    rb_hash_aset(new_dev, rb_id2sym(rb_intern("subvendor")),
+      rb_str_new2(subvendor)); }
+      
+  // Attach IDs
+  rb_hash_aset(new_dev, rb_id2sym(rb_intern("vendor_id")),
+    INT2NUM(dev_info->vendor_id));
+  rb_hash_aset(new_dev, rb_id2sym(rb_intern("device_id")),
+    INT2NUM(dev_info->device_id));
+  
+  // Driver information
+  const char *phy_ptr = pci_get_string_property(dev_info, PCI_FILL_PHYS_SLOT);
+  VALUE phys = Qnil;
+  if (phy_ptr) { phys = rb_str_new2(phy_ptr); } // End physical slot reader
+  rb_hash_aset(new_dev, rb_id2sym(rb_intern("phys")), phys);
+  
+  // Driver information link
+  // /proc/bus/pci/devices
+  VALUE matches = rb_hash_new();
+  rb_hash_aset(matches, rb_id2sym(rb_intern("bus")),
+    rb_sprintf("%02x%02x", dev->bus, dev->func));
+  rb_hash_aset(matches, rb_id2sym(rb_intern("idents")),
+    rb_sprintf("%04x%04x", dev_info->vendor_id, dev_info->device_id));
+  // Attach the matcher for /proc to the main device hash
+  rb_hash_aset(new_dev, rb_id2sym(rb_intern("matcher")), matches);
+  
+  // Modalias
+  const char *mod_ptr = pci_get_string_property(dev_info, PCI_FILL_MODULE_ALIAS);
+  VALUE module = Qnil;
+  if (mod_ptr) {
+    module = method_hidden_strip(self, rb_str_new2(mod_ptr));
+  } else {
+    module = rb_str_new2("");
+  } // End module reader
+  rb_hash_aset(new_dev, rb_id2sym(rb_intern("modalias")), module);
+  
+  // BIOS Label
+  const char *bios_ptr = pci_get_string_property(dev_info, PCI_FILL_LABEL);
+  VALUE label = Qnil;
+  if (bios_ptr) {
+    label = method_hidden_strip(self, rb_str_new2(bios_ptr));
+  } else {
+    label = rb_str_new2("");
+  } // End label reader
+  rb_hash_aset(new_dev, rb_id2sym(rb_intern("label")), label);
+  
+  // Format these as "0x02"
+  rb_hash_aset(new_dev, rb_id2sym(rb_intern("revision")),
+    INT2NUM(dev->revision));
+  rb_hash_aset(new_dev, rb_id2sym(rb_intern("rom_size")),
+    INT2NUM(dev->rom_size));
+  rb_hash_aset(new_dev, rb_id2sym(rb_intern("irq")),
+    INT2NUM(dev->irq));
+  rb_hash_aset(new_dev, rb_id2sym(rb_intern("numa_node")),
+    INT2NUM(dev_info->numa_node));
+  
+  // IOMMU Group
+  const char *iommu_ptr = pci_get_string_property(dev_info, PCI_FILL_IOMMU_GROUP);
+  VALUE iommu = Qnil;
+  if (iommu_ptr) {
+    iommu = method_hidden_strip(self, rb_str_new2(iommu_ptr));
+  } else {
+    iommu = rb_str_new2("");
+  } // End IOMMU group access
+  rb_hash_aset(new_dev, rb_id2sym(rb_intern("iommu")), iommu);
+  
+  pci_free_dev(dev_info); // Clear the information pointer
+  return new_dev;
+} // End attach hidden method
+
 // List all of the PCI devices
-VALUE method_pci_list(VALUE self) {
+VALUE method_pro_pci_list(VALUE self, VALUE count_only) {
   // Init main PCI system
   pci_system_init();
   // Allocate PCI device access list
@@ -79,12 +219,11 @@ VALUE method_pci_list(VALUE self) {
   pci_init(list); // Init resources
   pci_scan_bus(list); // Scan all devices
   
-  // Create the new mapping hash
-  //VALUE map = rb_hash_new();
-  //rb_hash_aset(map, rb_id2sym(rb_intern("modalias")),
-  //  method_pci_get_config(self));
+  // Array of devices or count of devices
+  VALUE devices = Qnil;
   
-  VALUE devices = rb_ary_new(); // Array of devices
+  // If count_only is NIL, create a device ARRAY
+  if (NIL_P(count_only)) { devices = rb_ary_new(); }
   int count = 0; // Device counter
   
   // Matcher used to simply say to get all the devices
@@ -111,11 +250,11 @@ VALUE method_pci_list(VALUE self) {
   // Loop until no more devices can be enumerated (.next => NULL)
   while (dev = pci_device_next(itr)) {
     // Class structure
-    // This was moved to the top, because it will
-    // be used to determine filters
+    // Class is still kept in this method, because it
+    // needs to be calculated to determine whether
+    // to further create the device. Subclass and PI
+    // will be created in the new method.
     int class = (dev->device_class & 0x7F8000) >> 16;
-    int subclass = (dev->device_class & 0x7F80) >> 8;
-    int prog_interface = dev->device_class & 0x7F;
     
     // Iterate over the filters to see if the
     // device matches. If filters length is 0,
@@ -124,135 +263,20 @@ VALUE method_pci_list(VALUE self) {
       if (!rb_ary_includes(PClassFilters, INT2NUM(class))) { continue; }
     } // End filter checker
     
-    // Allocate device object to store keys in
-    VALUE new_dev = rb_hash_new();
+    // If count_only is NOT set
+    // Create a new device to attach
+    // And then attach it to the list
+    if (NIL_P(count_only)) {
+      VALUE new_dev = method_hidden_attach_dev(self, list, dev, class);
+      rb_ary_store(devices, count, new_dev);
+    }
     
-    // Additional information struct
-    struct pci_dev *dev_info = pci_get_dev(list,
-      dev->domain_16, dev->bus, dev->dev, dev->func);
-    
-    // Use all flags possible
-    int flags = INT_MAX;
-    
-    // Fill in the card information, as flagged above
-    int e = pci_fill_info(dev_info, flags);
-    
-    // Core character data
-    const char *device = pci_device_get_device_name(dev);
-    const char *vendor = pci_device_get_vendor_name(dev);
-    const char *subdevice = pci_device_get_subdevice_name(dev);
-    const char *subvendor = pci_device_get_subvendor_name(dev);
-    
-    // Domain for the card
-    rb_hash_aset(new_dev, rb_id2sym(rb_intern("domain")), INT2NUM(dev->domain));
-    
-    // These should usually be formatted as "%02x" for display
-    rb_hash_aset(new_dev, rb_id2sym(rb_intern("class")), INT2NUM(class));
-    rb_hash_aset(new_dev, rb_id2sym(rb_intern("subclass")), INT2NUM(subclass));
-    rb_hash_aset(new_dev, rb_id2sym(rb_intern("prog_interface")),
-      INT2NUM(prog_interface));
-    
-    // Slot string
-    VALUE slot = rb_sprintf("%04x:%02x:%02x.%x",
-      dev->domain_16, dev->bus, dev->dev, dev->func);
-    
-    // Add the slot name
-    rb_hash_aset(new_dev, rb_id2sym(rb_intern("dev_name")), slot);
-    
-    // Slot parts are the raw slot data
-    VALUE slot_ary = rb_ary_new();
-    rb_ary_store(slot_ary, 0, INT2NUM(dev->domain_16));
-    rb_ary_store(slot_ary, 1, INT2NUM(dev->bus));
-    rb_ary_store(slot_ary, 2, INT2NUM(dev->dev));
-    rb_ary_store(slot_ary, 3, INT2NUM(dev->func));
-    
-    // Add the raw index portion
-    rb_hash_aset(new_dev, rb_id2sym(rb_intern("dev_raw")), slot_ary);
-    
-    // Attach core device info
-    if (device) {
-      rb_hash_aset(new_dev, rb_id2sym(rb_intern("device")),
-        rb_str_new2(device)); }
-    if (vendor) {
-      rb_hash_aset(new_dev, rb_id2sym(rb_intern("vendor")),
-        rb_str_new2(vendor)); }
-    if (subdevice) {
-      rb_hash_aset(new_dev, rb_id2sym(rb_intern("subdevice")),
-        rb_str_new2(subdevice)); }
-    if (subvendor) {
-      rb_hash_aset(new_dev, rb_id2sym(rb_intern("subvendor")),
-        rb_str_new2(subvendor)); }
-        
-    // Attach IDs
-    rb_hash_aset(new_dev, rb_id2sym(rb_intern("vendor_id")),
-      INT2NUM(dev_info->vendor_id));
-    rb_hash_aset(new_dev, rb_id2sym(rb_intern("device_id")),
-      INT2NUM(dev_info->device_id));
-    
-    // Driver information
-    const char *phy_ptr = pci_get_string_property(dev_info, PCI_FILL_PHYS_SLOT);
-    VALUE phys = Qnil;
-    if (phy_ptr) { phys = rb_str_new2(phy_ptr); } // End physical slot reader
-    rb_hash_aset(new_dev, rb_id2sym(rb_intern("phys")), phys);
-    
-    // Driver information link
-    // /proc/bus/pci/devices
-    VALUE matches = rb_hash_new();
-    rb_hash_aset(matches, rb_id2sym(rb_intern("bus")),
-      rb_sprintf("%02x%02x", dev->bus, dev->func));
-    rb_hash_aset(matches, rb_id2sym(rb_intern("idents")),
-      rb_sprintf("%04x%04x", dev_info->vendor_id, dev_info->device_id));
-    // Attach the matcher for /proc to the main device hash
-    rb_hash_aset(new_dev, rb_id2sym(rb_intern("matcher")), matches);
-    
-    // Modalias
-    const char *mod_ptr = pci_get_string_property(dev_info, PCI_FILL_MODULE_ALIAS);
-    VALUE module = Qnil;
-    if (mod_ptr) {
-      module = method_hidden_strip(self, rb_str_new2(mod_ptr));
-    } else {
-      module = rb_str_new2("");
-    } // End module reader
-    rb_hash_aset(new_dev, rb_id2sym(rb_intern("modalias")), module);
-    
-    // BIOS Label
-    const char *bios_ptr = pci_get_string_property(dev_info, PCI_FILL_LABEL);
-    VALUE label = Qnil;
-    if (bios_ptr) {
-      label = method_hidden_strip(self, rb_str_new2(bios_ptr));
-    } else {
-      label = rb_str_new2("");
-    } // End label reader
-    rb_hash_aset(new_dev, rb_id2sym(rb_intern("label")), label);
-    
-    // Format these as "0x02"
-    rb_hash_aset(new_dev, rb_id2sym(rb_intern("revision")),
-      INT2NUM(dev->revision));
-    rb_hash_aset(new_dev, rb_id2sym(rb_intern("rom_size")),
-      INT2NUM(dev->rom_size));
-    rb_hash_aset(new_dev, rb_id2sym(rb_intern("irq")),
-      INT2NUM(dev->irq));
-    rb_hash_aset(new_dev, rb_id2sym(rb_intern("numa_node")),
-      INT2NUM(dev_info->numa_node));
-    
-    // IOMMU Group
-    const char *iommu_ptr = pci_get_string_property(dev_info, PCI_FILL_IOMMU_GROUP);
-    VALUE iommu = Qnil;
-    if (iommu_ptr) {
-      iommu = method_hidden_strip(self, rb_str_new2(iommu_ptr));
-    } else {
-      iommu = rb_str_new2("");
-    } // End IOMMU group access
-    rb_hash_aset(new_dev, rb_id2sym(rb_intern("iommu")), iommu);
-    
-    // Attach the device to the devices list
-    rb_ary_store(devices, count, new_dev);
-    pci_free_dev(dev_info); // Clear the information pointer
     count++; // Increment the device counter
   } // End creation of new PCI device
   
-  // Attach all the devices
-  //rb_hash_aset(map, rb_id2sym(rb_intern("devices")), devices);
+  // If only wanted count, attach the count
+  if (!(NIL_P(count_only))) { devices = INT2NUM(count); }
+  
   // Clean up the resources
   pci_iterator_destroy(itr); // Delete iterator
   pci_cleanup(list); // Clean up PCI core system
@@ -261,24 +285,24 @@ VALUE method_pci_list(VALUE self) {
 } // End test method
 
 // Return the filters
-VALUE method_pci_filters_get(VALUE self) {
+VALUE method_pro_pci_filters_get(VALUE self) {
   return PClassFilters;
 } // End PCI filter return
 
 // Set the filters
-VALUE method_pci_filters_set(VALUE self, VALUE arg_arr) {
+VALUE method_pro_pci_filters_set(VALUE self, VALUE arg_arr) {
   // If it's an array, set the values
   if (RB_TYPE_P(arg_arr, T_ARRAY)) {
     int len = RARRAY_LEN(arg_arr);
     PClassFilters = arg_arr; // Apply the values
-    return method_pci_filters_get(self); // Return the filter array
+    return method_pro_pci_filters_get(self); // Return the filter array
   } else { // Print an error, if it is not an array
     return rb_str_new2("::PciCore ERROR:: Args must be in the form of an array.");
   }
 } // End PCI filter setter
 
 // Clear the filters
-VALUE method_pci_filters_clear(VALUE self) {
+VALUE method_pro_pci_filters_clear(VALUE self) {
   VALUE empty = rb_ary_new(); // Array has no args
   /* 
    * Set with empty array.
@@ -288,13 +312,14 @@ VALUE method_pci_filters_clear(VALUE self) {
    * 
    * Cannot fail, as it is an empty array.
   */
-  return method_pci_filters_set(self, empty);
+  return method_pro_pci_filters_set(self, empty);
 } // End PCI filter clear
 
 // Init the PCI Core extension
 void Init_pci_core() {
   // Init the module
   PciCore = rb_define_module("PciCore");
+  PciCoreAbs = rb_define_class_under(PciCore, "AbsPci", rb_cObject);
   PClassFilters = rb_ary_new();
   
   // Attach constants for filtering
@@ -304,10 +329,8 @@ void Init_pci_core() {
   rb_define_readonly_variable("$pci_class_filters", &PClassFilters);
   
   // Functions
-  rb_define_module_function(PciCore, "list", method_pci_list, 0);
-  rb_define_module_function(PciCore, "get_filters", method_pci_filters_get, 0);
-  rb_define_module_function(PciCore, "set_filters", method_pci_filters_set, 1);
-  rb_define_module_function(PciCore, "clear_filters", method_pci_filters_clear, 0);
-  
-  //rb_define_module_function(PciCore, "strip", method_hidden_strip, 1);
+  rb_define_protected_method(PciCoreAbs, "pro_list", method_pro_pci_list, 1);
+  rb_define_protected_method(PciCoreAbs, "pro_get_filters", method_pro_pci_filters_get, 0);
+  rb_define_protected_method(PciCoreAbs, "pro_set_filters", method_pro_pci_filters_set, 1);
+  rb_define_protected_method(PciCoreAbs, "pro_clear_filters", method_pro_pci_filters_clear, 0);
 } // End init

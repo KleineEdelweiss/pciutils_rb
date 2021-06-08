@@ -12,19 +12,21 @@ require_relative "../pci_core/pci_core"
 module PciUtils
   ##
   # Stat the cache
-  def self.stat
-    out = PciUtils::Cache.instance.stat
+  def self.stat(count_only = nil)
+    out = PciUtils::Cache.instance.stat count_only
     if out then # Make sure the cache is loaded
       return out
     else # Otherwise, load it and return that
-      self.update
+      self.update count_only
       return PciUtils::Cache.instance.stat
     end
   end # End stat method
   
   ##
   # Update the cache
-  def self.update() PciUtils::Cache.instance.update end
+  def self.update(count_only = nil)
+    PciUtils::Cache.instance.update count_only
+  end # End update method
   
   ##
   # Load in the procfs data
@@ -48,7 +50,7 @@ module PciUtils
   # method. As this can have resource-heavy operations and
   # there is unlikely to be any need for multiple copies, it
   # is being implemented as a singleton.
-  class Cache
+  class Cache < PciCore::AbsPci
     include Singleton
     ##
     # Cache of the raw C-code data
@@ -62,19 +64,38 @@ module PciUtils
     # Cache of the merged data (cache of actual devices)
     attr_reader :mcache
     alias :cache :mcache
-    alias :stat :mcache
+    
+    ##
+    # Stat the cache, if it is populated. Otherwise,
+    # populate it and then stat it.
+    def stat(count_only = nil)
+      case
+      # Return the cache length
+      when (@mcache and count_only) then
+        @mcache.length
+      # Return the cache data
+      when @mcache then
+        @mcache
+      # Update the cache and send back the data
+      else
+        update count_only
+      end
+    end # End cache stat method
     
     ##
     # Update the cache
-    def update
+    def update(count_only = nil)
       # Load in the PCI devices from C
-      @ccache = PciCore.list
-      
-      # Load the procfs data
-      @pcache = PciUtils.procload
-      
-      # Merge the data
-      merge_caches
+      if count_only then return pro_list true
+      else
+        @ccache = pro_list nil
+        @mcache = @ccache
+        # Load the procfs data
+        @pcache = PciUtils.procload
+        
+        # Merge the data
+        merge_caches
+      end
     end # End the update method
     
     ##
@@ -97,10 +118,23 @@ module PciUtils
         # Add the new device to the merge cache
         @mcache << d
       end
-      # Print the count and return it
+      # Print the count of devices that could be merged
+      # (debug only)
       puts "#{cnt} devices have procfs-discernible drivers"
-      cnt
+      @mcache # Return the merged cache
     end # End the device merge method
+    
+    ##
+    # Set the filters for the underlying abstract class
+    def set_filters(filters) pro_set_filters(filters) end # End filter setter
+    
+    ##
+    # Clear the filters for the underlying abstract class
+    def clear_filters() pro_clear_filters end
+    
+    ##
+    # Return the filters from the underlying class
+    def get_filters() pro_get_filters end
   end # End Cache class
 end # End PCIU module
 
