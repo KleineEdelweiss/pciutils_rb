@@ -162,6 +162,3 @@ module PciUtils
     def get_filters() pro_get_filters end
   end # End Cache class
 end # End PCIU module
-
-# d = File.read("/proc/bus/pci/devices").split(/\n/).collect { |row| row.split(/\s+/) }
-# d.collect do |row| row.last end .select do |val| val.match? /\D/ end
