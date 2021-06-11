@@ -12,20 +12,20 @@ require_relative "../pci_core/pci_core"
 module PciUtils
   ##
   # Stat the cache
-  def self.stat(count_only = nil)
-    out = PciUtils::Cache.instance.stat count_only
+  def self.stat(count_type = PciCore::PCI_ENUM_LIST)
+    out = PciUtils::Cache.instance.stat count_type
     if out then # Make sure the cache is loaded
       return out
     else # Otherwise, load it and return that
-      self.update count_only
+      self.update PciCore::PCI_ENUM_LIST
       return PciUtils::Cache.instance.stat
     end
   end # End stat method
   
   ##
   # Update the cache
-  def self.update(count_only = nil)
-    PciUtils::Cache.instance.update count_only
+  def self.update(count_type = PciCore::PCI_ENUM_LIST)
+    PciUtils::Cache.instance.update count_type
   end # End update method
   
   ##
@@ -75,18 +75,21 @@ module PciUtils
     ##
     # Stat the cache, if it is populated. Otherwise,
     # populate it and then stat it.
-    def stat(count_only = nil)
+    def stat(count_type = PciCore::PCI_ENUM_LIST)
+      # Check if the merged cache is filled.
+      # If not, fill it.
+      if !@mcache then update PciCore::PCI_ENUM_LIST end
+      
+      # Find the case to return
       case
-      # Return the cache length
-      when (@mcache and count_only) then
+      # Return the cache length, if count requested
+      when (count_type == PciCore::PCI_ENUM_COUNT) then
         @mcache.length
-      # Return the cache data
-      when @mcache then
+      # Return the cache data, if list requested
+      when (count_type == PciCore::PCI_ENUM_LIST) then
         @mcache
-      # Update the cache and send back the data
-      else
-        update count_only
-      end
+      # Otherwise update from the count type
+      else update count_type end
     end # End cache stat method
     
     ##
@@ -101,16 +104,20 @@ module PciUtils
     
     ##
     # Update the cache
-    def update(count_only = nil)
+    def update(count_type = PciCore::PCI_ENUM_LIST)
       # Load in the PCI devices from C
-      if count_only then return pro_list true
-      else
-        @ccache = pro_list nil
+      data = pro_list count_type
+      if count_type == PciCore::PCI_ENUM_LIST then
+        @ccache = data
         # Load the procfs data,
         # and then merge the caches.
         procload
         merge_caches
-      end
+      # If it is not PCI_ENUM_LIST, the value will be:
+      # -PCI_ENUM_COUNT => Number
+      # -PCI_ENUM_VERIFY => List of modaliases
+      # -anything else => Error message
+      else return data end
     end # End the update method
     
     ##
@@ -149,13 +156,16 @@ module PciUtils
     # for the double-wrapping is in case the AbsPci class is
     # wrapped by something else.
     def set_filters(filters)
-      #pro_set_filters(filters.collect { |x| Fixnum === x })
       pro_set_filters(filters)
+      update
     end # End filter setter
     
     ##
     # Clear the filters for the underlying abstract class
-    def clear_filters() pro_clear_filters end
+    def clear_filters
+      pro_clear_filters
+      update
+    end # End clearing of filters
     
     ##
     # Return the filters from the underlying class

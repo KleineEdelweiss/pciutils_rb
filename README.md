@@ -23,7 +23,7 @@ sudo [yum, dnf] install libpci-devel libpciaccess-devel ruby-devel[-version]
 # Arch, etc.
 # Ruby libs are included with a Ruby environment,
 # and libpci appears to come with pciutils.
-sudo yay -Sy libpciaccess pciutils
+sudo [pacman, yay] -Sy libpciaccess pciutils
 ```
 
 ### TO-DO ###

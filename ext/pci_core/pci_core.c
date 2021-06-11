@@ -15,9 +15,6 @@
 // Other modules
 #include <string.h>
 
-// Buffer size
-#define BUFSIZE 4096
-
 // Local modules
 #include "./pci_core.h"
 
@@ -25,6 +22,7 @@
 VALUE PciCore = Qnil;
 VALUE PciCoreAbs = Qnil;
 VALUE PClassFilters = Qnil;
+VALUE PciValidEnums = Qnil;
 
 /*
  * PCI devices classes are stored under #{architecture}/pci/header.h.
@@ -71,12 +69,26 @@ VALUE method_hidden_strip(VALUE self, VALUE string) {
   return rb_str_substr(str, st, (en - st));
 } // End strip
 
+// Get the modalias of the device
+VALUE method_get_modalias(VALUE self, struct pci_dev *dev_info) {
+  // Modalias
+  const char *mod_ptr = pci_get_string_property(dev_info, PCI_FILL_MODULE_ALIAS);
+  VALUE module = Qnil;
+  if (mod_ptr) {
+    module = method_hidden_strip(self, rb_str_new2(mod_ptr));
+  } else {
+    module = rb_str_new2("");
+  } // End module reader
+  
+} // End modalias method
+
 // Separate method to attach individual devices to the
 // device list map.
 VALUE method_hidden_attach_dev(
   VALUE self,
   struct pci_access *list,
   struct pci_device *dev,
+  struct pci_dev *dev_info,
   int class
 ) {
   // Class structure
@@ -87,16 +99,6 @@ VALUE method_hidden_attach_dev(
     
   // Allocate device object to store keys in
   VALUE new_dev = rb_hash_new();
-  
-  // Additional information struct
-  struct pci_dev *dev_info = pci_get_dev(list,
-    dev->domain_16, dev->bus, dev->dev, dev->func);
-  
-  // Use all flags possible
-  int flags = INT_MAX;
-  
-  // Fill in the card information, as flagged above
-  int e = pci_fill_info(dev_info, flags);
   
   // Core character data
   const char *device = pci_device_get_device_name(dev);
@@ -166,16 +168,6 @@ VALUE method_hidden_attach_dev(
   // Attach the matcher for /proc to the main device hash
   rb_hash_aset(new_dev, rb_id2sym(rb_intern("matcher")), matches);
   
-  // Modalias
-  const char *mod_ptr = pci_get_string_property(dev_info, PCI_FILL_MODULE_ALIAS);
-  VALUE module = Qnil;
-  if (mod_ptr) {
-    module = method_hidden_strip(self, rb_str_new2(mod_ptr));
-  } else {
-    module = rb_str_new2("");
-  } // End module reader
-  rb_hash_aset(new_dev, rb_id2sym(rb_intern("modalias")), module);
-  
   // BIOS Label
   const char *bios_ptr = pci_get_string_property(dev_info, PCI_FILL_LABEL);
   VALUE label = Qnil;
@@ -205,13 +197,11 @@ VALUE method_hidden_attach_dev(
     iommu = rb_str_new2("");
   } // End IOMMU group access
   rb_hash_aset(new_dev, rb_id2sym(rb_intern("iommu")), iommu);
-  
-  pci_free_dev(dev_info); // Clear the information pointer
   return new_dev;
 } // End attach hidden method
 
 // List all of the PCI devices
-VALUE method_pro_pci_list(VALUE self, VALUE count_only) {
+VALUE method_pro_pci_list(VALUE self, VALUE count_type) {
   // Init main PCI system
   pci_system_init();
   // Allocate PCI device access list
@@ -222,8 +212,18 @@ VALUE method_pro_pci_list(VALUE self, VALUE count_only) {
   // Array of devices or count of devices
   VALUE devices = Qnil;
   
-  // If count_only is NIL, create a device ARRAY
-  if (NIL_P(count_only)) { devices = rb_ary_new(); }
+  // If count_type is NOT the count value, create a device ARRAY
+  switch (count_type) {
+    case PCI_ENUM_LIST:
+    case PCI_ENUM_VERIFY:
+      // Make the array and continue
+      devices = rb_ary_new();
+      break;
+    case PCI_ENUM_COUNT:
+      break; // It will just attach at the end
+    default:
+      return rb_str_new2("::PciCore ERROR:: Invalid enum selection");
+  } // End count checker type
   int count = 0; // Device counter
   
   // Matcher used to simply say to get all the devices
@@ -263,19 +263,39 @@ VALUE method_pro_pci_list(VALUE self, VALUE count_only) {
       if (!rb_ary_includes(PClassFilters, INT2NUM(class))) { continue; }
     } // End filter checker
     
-    // If count_only is NOT set
-    // Create a new device to attach
-    // And then attach it to the list
-    if (NIL_P(count_only)) {
-      VALUE new_dev = method_hidden_attach_dev(self, list, dev, class);
-      rb_ary_store(devices, count, new_dev);
-    }
+    // Additional information struct
+    struct pci_dev *dev_info = pci_get_dev(list,
+      dev->domain_16, dev->bus, dev->dev, dev->func);
     
+    // Fill in the card information, as flagged above
+    int e = pci_fill_info(dev_info, DEV_FLAGS);
+    
+    // Choose the correct operations, based on
+    // the type of count requested.
+    VALUE new_dev = Qnil;
+    switch (count_type) {
+      case PCI_ENUM_COUNT:
+        break; // Do nothing, b/c only the count matters
+      case PCI_ENUM_LIST:
+        // Make the new_dev the hash
+        new_dev = method_hidden_attach_dev(self, list, dev, dev_info, class);
+      case PCI_ENUM_VERIFY:
+        // Add the modalias, then add the
+        // device hash to the array.
+        { VALUE module = method_get_modalias(self, dev_info);
+        if (RB_TYPE_P(new_dev, T_HASH)) {
+          rb_hash_aset(new_dev, rb_id2sym(rb_intern("modalias")), module);
+        } else { new_dev = module; }
+        rb_ary_store(devices, count, new_dev); }
+        break;
+    } // End switch for listing type selection
+    
+    pci_free_dev(dev_info); // Clear the information pointer
     count++; // Increment the device counter
   } // End creation of new PCI device
   
   // If only wanted count, attach the count
-  if (!(NIL_P(count_only))) { devices = INT2NUM(count); }
+  if (count_type == PCI_ENUM_COUNT) { devices = INT2NUM(count); }
   
   // Clean up the resources
   pci_iterator_destroy(itr); // Delete iterator
@@ -333,6 +353,9 @@ void Init_pci_core() {
   PciCore = rb_define_module("PciCore");
   PciCoreAbs = rb_define_class_under(PciCore, "AbsPci", rb_cObject);
   PClassFilters = rb_ary_new();
+  
+  // Store the enums
+  method_store_enums(PciValidEnums);
   
   // Attach constants for filtering
   method_attach_constants(PciCore);
